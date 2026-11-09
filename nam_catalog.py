@@ -1,4 +1,4 @@
-"""Build the Helix LT NAM catalog from the local HX Edit 3.82 resources."""
+"""Build the Helix LT/Floor NAM catalog from the local HX Edit 3.82 resources."""
 
 import copy
 import hashlib
@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parent
 EXE_HASH = 'f7faac4996164f9039c9ae3ca8d85cd135c5bceae8a511c8921a1244046cab66'
 NAM_SYMBOL = 'HD2_AmpNAMLite'
 NAM_ID = 380
-LT_DEVICE_ID = 0x00210004
+# Devices whose 3.80.0 NAM builds use model 380: Helix LT (helix-lt-nam) and Helix Floor
+# (savedadodo/helix-floor-nam-lite).
+DEVICE_IDS = (0x00210004, 0x00210001)
 
 
 def nul(value):
@@ -54,7 +56,7 @@ def patch_catalog(resources):
     model['name\0'] = 'NAM A2 Lite\0'
     model['symbolicID\0'] = nul(NAM_SYMBOL)
     model['load\0'] = 36.0
-    model['devices\0'] = [{'id\0': LT_DEVICE_ID, 'version\0': '0x03800000\0'}]
+    model['devices\0'] = [{'id\0': device, 'version\0': '0x03800000\0'} for device in DEVICE_IDS]
     model['params\0'] = parameters + [amp_params['@enabled\0'], amp_params['@bypassvolume\0']]
     del model['cablink\0'], model['ircablink\0']
     definitions.append(model)
@@ -116,8 +118,8 @@ def patch_library(resources, scan_error):
                 <multiline>yes</multiline><text_color>0xFFC4C4C4</text_color></text>
         </text_widget>
     ''')
-    status = ('Connect Helix LT and restart to scan profiles.' if scan_error
-              else 'No NAM profiles on this Helix LT.')
+    status = ('Connect your Helix and restart to scan profiles.' if scan_error
+              else 'No NAM profiles on this Helix.')
     message.find('text/label').text = status + '\nUse Import to add a profile to a free slot.'
     frame.append(message)
     library.append(view)

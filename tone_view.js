@@ -296,7 +296,7 @@ function installToneView() {
         applyProfile(request, saved);
       } else {
         active.previewSlot ??= namView.freeSlots()[0];
-        if (!active.previewSlot) throw new Error('No free User IR slots on Helix LT.');
+        if (!active.previewSlot) throw new Error('No free User IR slots on the Helix.');
         const transfer = namView.importPreview(request.file, active.previewSlot);
         awaitImport(request, transfer, () => applyProfile(request, transfer));
       }
