@@ -28,7 +28,7 @@ FIRMWARE_FILES = (
     'tools/sharc/ssim.py', 'tools/sharc/recips_table.json',
 )
 APP_FILES = ('start-hx-edit-nam-macos.py', 'prepare_editor_macos.py', 'nam_catalog.py',
-             'nam_inventory_macos.py', 'nam_inventory.py', 'nam_convert.py', 'nam_macos.js',
+             'nam_inventory_macos.py', 'nam_inventory.py', 'nam_convert.py', 'nam_library.py', 'nam_macos.js',
              'tone3000.py', 'tone_browser.py',
              'tone_browser_macos.py', 'tone_card.html', 'tone_macos.js', 'tone_preview.py')
 

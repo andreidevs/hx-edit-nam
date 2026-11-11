@@ -112,7 +112,7 @@ def select_tone(client_id, stopped, *, open_browser):
         redirect = f'http://127.0.0.1:{server.server_port}{CALLBACK}'
         params = dict(client_id=client_id, redirect_uri=redirect, response_type='code',
                       code_challenge=challenge, code_challenge_method='S256', state=state,
-                      prompt='select_tone', gears='amp_amp-cab', format='nam', architecture='2',
+                      prompt='select_tone', gears='amp_amp-cab_pedal', format='nam', architecture='2',
                       menubar='true')
         if not open_browser(f'{API}/oauth/authorize?{urlencode(params)}'):
             if stopped.is_set():
@@ -134,8 +134,8 @@ def select_tone(client_id, stopped, *, open_browser):
 
 def get_tone(tone_id, token):
     tone = json.loads(read_url(f'{API}/tones/{tone_id}?architecture=2', token=token))
-    if tone['format'] != 'nam' or tone['gear'] not in {'amp', 'amp-cab'}:
-        raise ToneError('Choose a NAM amp or amp + cab tone.')
+    if tone['format'] != 'nam' or tone['gear'] not in {'amp', 'amp-cab', 'pedal'}:
+        raise ToneError('Choose a NAM amp, amp + cab or pedal tone.')
     models = []
     for page in range(1, 11):
         query = urlencode(dict(tone_id=tone_id, architecture=2, page=page, page_size=100))
@@ -163,4 +163,9 @@ def prepare_model(model, token, workspace, converter):
         name = f'{label} {number}' if label else f'T3K {number}'
         capture = Path(folder, name + '.nam')
         capture.write_bytes(read_url(model['model_url'], token=token))
-        return convert_batch([capture], workspace, converter)[0]
+        converted = convert_batch([capture], workspace, converter)[0]
+        # Keep the original for Add to library and Save to Helix during this session.
+        kept = Path(workspace, 'captures')
+        kept.mkdir(exist_ok=True)
+        capture.replace(kept / capture.name)
+        return converted

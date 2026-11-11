@@ -338,8 +338,7 @@ function installToneView() {
       if (saved) {
         applyProfile(request, saved);
       } else {
-        active.previewSlot ??= namView.freeSlots()[0];
-        if (!active.previewSlot) throw new Error('No free User IR slots on the Helix.');
+        active.previewSlot = AUDITION_SLOT;
         const transfer = namView.importPreview(request.file, active.previewSlot, true);
         awaitImport(request, transfer, () => applyProfile(request, transfer));
       }
@@ -356,7 +355,7 @@ function installToneView() {
       const trial = active.transfer;
       if (!canRestore(trial)) throw new Error('The audition changed. Reopen TONE3000 on the desired block.');
       const { slot } = request;
-      if (!Number.isInteger(slot) || slot < 1 || slot > 128 || slot === active.previewSlot) {
+      if (!Number.isInteger(slot) || slot < 1 || slot >= AUDITION_SLOT) {
         throw new Error('Select a different free User IR slot.');
       }
       const saved = namView.importPreview(trial.source, slot);

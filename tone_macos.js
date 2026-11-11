@@ -282,8 +282,10 @@ function installToneMac(nam) {
         await restore(state);
       } else if (request.action === 'audition') {
         await restore(state);
-        state.scratch ??= await main(() => nam.freeSlots()[0]);
-        if (!state.scratch) throw new Error('No free User IR slots on the Helix.');
+        if (!state.scratch && !await main(() => nam.auditionSlotEmpty())) {
+          throw new Error(`Clear User IR ${AUDITION_SLOT}. It is reserved for TONE3000 auditions.`);
+        }
+        state.scratch = AUDITION_SLOT;
         const transfer = await upload(state, request.file, state.scratch, true);
         await apply(state, transfer, true);
         result.slot = transfer.slot;

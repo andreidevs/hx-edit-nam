@@ -21,6 +21,8 @@ NAM_ID = 380
 HX_NAM_ID = 555
 HX_NAM_SYMBOL = 'HD2_DistNAMLite'
 DEVICE_IDS = (0x00210004, 0x00210001)  # Helix LT and Helix Floor
+SETTINGS = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'HX Edit NAM' / 'settings.json'
+SIDEBAR_WIDTHS = (220, 600)  # Stock width to the widest nam_view.js allows
 
 
 def nul(value):
@@ -193,8 +195,7 @@ def patch_library(resources, scan_error):
     button.set('id', '4')
     button.set('name', 'NAM Profiles Button')
     button.find('text/label').text = 'NAM'
-    tabs.find("radio_button_widget[@id='3']/corner_radius").set('tr', 'no')
-    button.find('corner_radius').set('tr', 'yes')
+    # nam_view.js shows NAM before Favorites, so Favorites keeps the rounded corner.
     tabs.append(button)
     for tab in tabs.findall('radio_button_widget'):
         tab.find('text/font').set('size', '11')
@@ -232,6 +233,57 @@ def patch_library(resources, scan_error):
     tree.write(path, encoding='utf-8')
 
 
+def ir_parameters(resources):
+    """Map every model symbol to its IR-slot parameters; Clear protection fails on unknown models."""
+    catalog = {}
+    for model in msgpack.unpackb((resources / 'HelixModelDefs.bin').read_bytes()):
+        symbol = model['symbolicID\0'].rstrip('\0')
+        params = [p['symbolicID\0'].rstrip('\0') for p in model.get('params\0', [])
+                  if p.get('displayType\0') == 'ir_select\0']
+        if catalog.setdefault(symbol, params) != params:
+            raise ValueError(f'Conflicting IR parameters for {symbol}.')
+    return catalog
+
+
+def load_settings():
+    try:
+        settings = json.loads(SETTINGS.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    return settings if isinstance(settings, dict) else {}
+
+
+def save_setting(key, value):
+    settings = load_settings()
+    settings[key] = value
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.write_text(json.dumps(settings, indent=2) + '\n', encoding='utf-8')
+
+
+def sidebar_width():
+    width = load_settings().get('sidebarWidth')
+    return width if type(width) is int and SIDEBAR_WIDTHS[0] <= width <= SIDEBAR_WIDTHS[1] else 0
+
+
+def patch_sidebar(resources, width):
+    if not width:
+        return
+    main = resources / 'main.xml'
+    tree = ET.parse(main)
+    root = tree.getroot()
+    placeholder = root.find(".//panel_widget[@id='livw']")
+    editor = root.find(".//panel_widget[@id='edvw']/anchor_pos")
+    if placeholder is None or editor is None or editor.get('left') != '228':
+        raise ValueError('Unexpected HX Edit sidebar layout.')
+    placeholder.set('width', str(width))
+    editor.set('left', str(width + 8))
+    tree.write(main, encoding='utf-8')
+    librarian = resources / 'librarian.xml'
+    tree = ET.parse(librarian)
+    tree.getroot().find("panel_widget[@id='livw']").set('width', str(width))
+    tree.write(librarian, encoding='utf-8')
+
+
 def prepare_copy(working_directory, scan_error=False, *, hx_nam=None):
     baseline = ROOT / 'build' / 'HX Edit'
     if not (baseline / 'HX Edit.exe').is_file():
@@ -255,4 +307,5 @@ def prepare_copy(working_directory, scan_error=False, *, hx_nam=None):
     if names := read_custom_names(ROOT / 'custom-names.csv'):
         rename_stock_models(resources, names)
     patch_library(resources, scan_error)
+    patch_sidebar(resources, sidebar_width())
     return exe

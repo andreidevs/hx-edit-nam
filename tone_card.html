@@ -53,6 +53,8 @@
   <button id="source" $hidden>View on TONE3000</button>
   <button id="back" hidden>Back to catalog</button>
   <button id="retry" hidden>Browse again</button>
+  <button id="library" $library>Library</button>
+  <button id="keep" hidden>Add to library</button>
   <div class="destination" hidden>
     <select id="destination" aria-label="Free User IR slot"></select>
     <button id="save">Save to Helix</button>
@@ -76,6 +78,9 @@
   back.onclick = () => host.postMessage('back');
   retry.onclick = () => host.postMessage('retry');
   finish.onclick = () => host.postMessage('finish');
+  const keep = document.querySelector('#keep');
+  document.querySelector('#library').onclick = () => host.postMessage('library');
+  keep.onclick = () => host.postMessage('keep:' + trial);
   save.onclick = () => host.postMessage('save:' + trial + ':' + destination.value);
   window.hxToneStatus = data => {
     model.disabled = source.disabled = !!data.busy;
@@ -90,6 +95,8 @@
     destination.replaceChildren(...slots.map(slot => new Option('User IR ' + slot, slot)));
     if (slots.includes(Number(previous))) destination.value = previous;
     destination.parentElement.hidden = trial == null;
+    keep.hidden = trial == null || !data.keep;
+    keep.disabled = !!data.busy;
     destination.disabled = save.disabled = !!data.busy || !slots.length;
   };
   host?.addEventListener?.('message', ({data}) => window.hxToneStatus(data));

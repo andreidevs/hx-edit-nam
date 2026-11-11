@@ -18,7 +18,9 @@ def message(text, flags):
 
 
 def run_editor(exe, workspace, device, profiles):
+    from nam_catalog import ir_parameters, save_setting, sidebar_width
     from nam_convert import convert_batch, stage_tone_import, validate_import
+    from nam_library import Library
     from tone_preview import TonePreview
 
     pid = device.spawn([str(exe)], cwd=str(exe.parent))
@@ -32,10 +34,11 @@ def run_editor(exe, workspace, device, profiles):
         view = (ROOT / 'nam_view.js').read_text(encoding='utf-8')
         tone = (ROOT / 'tone_view.js').read_text(encoding='utf-8')
         script = session.create_script(
-            f"{view}\n{imports}\n{tone}\nconst namView = installNamView({json.dumps(profiles)});"
+            f"{view}\n{imports}\n{tone}\nconst namView = installNamView({json.dumps(profiles)}, {sidebar_width()}, {json.dumps(ir_parameters(exe.parent / 'res'))});"
             "\ninstallToneView();\nsend({ type: 'ready' });"
         )
-        preview = TonePreview(script, workspace, CONVERTER, detached, message)
+        library = Library()
+        preview = TonePreview(script, workspace, CONVERTER, detached, message, library=library)
 
         def on_message(event, _data):
             if event['type'] == 'error':
@@ -45,12 +48,23 @@ def run_editor(exe, workspace, device, profiles):
             payload = event.get('payload', {})
             if payload.get('type') == 'ready':
                 ready.set()
+            if payload.get('type') == 'sidebarWidth':
+                try:
+                    save_setting('sidebarWidth', int(payload['width']))
+                except (OSError, TypeError, ValueError, KeyError) as error:
+                    print(f'Could not save the sidebar width: {error}')
             if payload.get('type') in {'toneStart', 'toneBounds', 'toneReply'}:
                 preview.receive(payload)
             if payload.get('type') in {'convert', 'validateImport', 'stageTone'}:
                 try:
                     if payload['type'] == 'convert':
                         result = {'files': convert_batch(payload['files'], workspace, CONVERTER)}
+                        for file in payload['files']:
+                            if file.lower().endswith('.nam'):
+                                try:
+                                    library.add(file)
+                                except OSError as error:
+                                    print(f'Could not add {file} to the NAM library: {error}')
                     elif payload['type'] == 'stageTone':
                         staged = stage_tone_import(payload['file'], workspace, audition=payload['audition'])
                         result = {'file': str(staged)}

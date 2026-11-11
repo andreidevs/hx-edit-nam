@@ -42,11 +42,13 @@ const importFiles = new NativeFunction(importAddress, 'void', importTypes, 'this
 const getIrRow = new NativeFunction(base.add(0x380610), 'pointer', ['pointer', 'int'], 'thiscall');
 let namImportController = NULL;
 let toneImport = null;
+// TONE3000 auditions always use the last User IR; NAM imports and saves stay in 1–127.
+const AUDITION_SLOT = 128;
 
 function firstFreeSlot(list, count) {
   if (list.isNull()) return -1;
   let available = 0;
-  for (let slot = 0; slot < 128; slot++) {
+  for (let slot = 0; slot < AUDITION_SLOT - 1; slot++) {
     const row = getIrRow(list, slot);
     available = !row.isNull() && !row.add(0x10c).readU32() ? available + 1 : 0;
     if (available === count) return slot - count + 1;

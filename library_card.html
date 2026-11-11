@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>NAM library</title>
+<style>
+  :root { color-scheme: dark; font: 13px 'Segoe UI', sans-serif; background: #171717; color: #f0f0f0; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  [hidden] { display: none !important; }
+  header, footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; background: #232323; }
+  header { border-bottom: 1px solid #404040; }
+  footer { border-top: 1px solid #404040; justify-content: flex-end; }
+  input, select, button { font: inherit; background: #333; color: inherit; border: 1px solid #575757; border-radius: 4px; padding: 3px 8px; }
+  #search { flex: 1; min-width: 120px; }
+  button:enabled { cursor: pointer; }
+  button:disabled { opacity: .5; }
+  :focus-visible { outline: 2px solid #fa8585; }
+  .rows { flex: 1; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { position: sticky; top: 0; background: #1e1e1e; text-align: left; font-weight: 600; }
+  th button { all: unset; cursor: pointer; display: block; padding: 5px 8px; }
+  td { padding: 3px 8px; border-bottom: 1px solid #262626; white-space: nowrap; }
+  td.name { max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #262626; }
+  tbody tr[aria-selected="true"] { background: #4a2425; }
+  td select { padding: 1px 4px; }
+  .empty { padding: 16px 10px; color: #aaa; }
+  #status { flex: 1; min-width: 80px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .destination { display: flex; align-items: center; gap: 6px; }
+  #save:enabled, #audition:enabled { background: #862829; border-color: #b54545; }
+</style>
+<header>
+  <input id="search" type="search" placeholder="Search the library" aria-label="Search the library">
+  <select id="filter" aria-label="Type"><option value="*">All types</option>$gears</select>
+  <button id="catalog">TONE3000</button>
+</header>
+<div class="rows">
+  <table>
+    <thead><tr>
+      <th aria-sort="ascending"><button data-key="name">Name</button></th>
+      <th><button data-key="gear">Type</button></th>
+      <th><button data-key="added">Added</button></th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="empty" hidden>No captures yet. NAM files you import and TONE3000 profiles you save or add appear here.</p>
+</div>
+<footer>
+  <p id="status" role="status"></p>
+  <button id="remove" disabled>Remove</button>
+  <button id="audition" disabled>Audition</button>
+  <div class="destination" hidden>
+    <select id="destination" aria-label="Free User IR slot"></select>
+    <button id="save">Save to Helix</button>
+  </div>
+  <button id="finish">Close</button>
+</footer>
+<template id="gears">$gears</template>
+<script>
+  const rows = $rows;
+  const host = window.chrome?.webview;
+  const q = selector => document.querySelector(selector);
+  const body = q('tbody'), search = q('#search'), filter = q('#filter');
+  const destination = q('#destination'), save = q('#save'), audition = q('#audition'), remove = q('#remove');
+  let sort = { key: 'name', direction: 1 };
+  let selected = null, trial = null, busy = false;
+
+  function render() {
+    const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = rows.filter(row => (filter.value === '*' || row.gear === filter.value) &&
+      words.every(word => row.name.toLowerCase().includes(word)));
+    shown.sort((a, b) => sort.direction * String(a[sort.key]).localeCompare(String(b[sort.key]), undefined, { numeric: true }));
+    body.replaceChildren(...shown.map(row => {
+      const tr = document.createElement('tr');
+      tr.setAttribute('aria-selected', String(row.id === selected));
+      const name = tr.insertCell();
+      name.className = 'name';
+      name.textContent = name.title = row.name;
+      const gear = document.createElement('select');
+      gear.innerHTML = q('#gears').innerHTML;
+      gear.value = row.gear;
+      gear.setAttribute('aria-label', 'Type of ' + row.name);
+      gear.onclick = event => event.stopPropagation();
+      gear.onchange = () => { row.gear = gear.value; host.postMessage('gear:' + row.id + ':' + gear.value); render(); };
+      tr.insertCell().append(gear);
+      tr.insertCell().textContent = row.added;
+      tr.onclick = () => { selected = row.id; render(); };
+      tr.ondblclick = () => { selected = row.id; pick(); };
+      return tr;
+    }));
+    q('.empty').hidden = rows.length > 0;
+    audition.disabled = busy || !selected;
+    remove.disabled = busy || !selected;
+  }
+
+  function pick() {
+    if (!busy && selected) host.postMessage('pick:' + selected);
+  }
+
+  for (const button of document.querySelectorAll('th button')) {
+    button.onclick = () => {
+      const key = button.dataset.key;
+      sort = { key, direction: sort.key === key ? -sort.direction : 1 };
+      for (const th of document.querySelectorAll('th')) th.removeAttribute('aria-sort');
+      button.parentElement.setAttribute('aria-sort', sort.direction > 0 ? 'ascending' : 'descending');
+      render();
+    };
+  }
+  search.oninput = filter.onchange = render;
+  audition.onclick = pick;
+  remove.onclick = () => {
+    const index = rows.findIndex(row => row.id === selected);
+    if (index < 0 || !confirm('Remove "' + rows[index].name + '" from the library on this PC?')) return;
+    host.postMessage('remove:' + selected);
+    rows.splice(index, 1);
+    selected = null;
+    render();
+  };
+  q('#catalog').onclick = () => host.postMessage('catalog');
+  q('#finish').onclick = () => host.postMessage('finish');
+  save.onclick = () => host.postMessage('save:' + trial + ':' + destination.value);
+
+  window.hxToneStatus = data => {
+    busy = !!data.busy;
+    q('#status').textContent = q('#status').title = data.text || '';
+    trial = data.trial;
+    const slots = data.free_slots || [];
+    destination.replaceChildren(...slots.map(slot => new Option('User IR ' + slot, slot)));
+    destination.parentElement.hidden = trial == null;
+    destination.disabled = save.disabled = busy || !slots.length;
+    render();
+  };
+  host?.addEventListener?.('message', ({data}) => window.hxToneStatus(data));
+  render();
+</script>
+</html>

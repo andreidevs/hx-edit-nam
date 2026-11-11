@@ -1,5 +1,8 @@
 'use strict';
 
+// TONE3000 auditions always use the last User IR; NAM imports and saves stay in 1–127.
+const AUDITION_SLOT = 128;
+
 // HX Edit 3.82 arm64. The builder verifies the original Mach-O before patching it.
 function installNamMac(profiles, scanFailed) {
   if (Process.arch !== 'arm64' || Process.platform !== 'darwin') {
@@ -70,7 +73,7 @@ function installNamMac(profiles, scanFailed) {
 
   function firstFree(count) {
     let run = 0;
-    for (let slot = 1; slot <= 128; slot++) {
+    for (let slot = 1; slot < AUDITION_SLOT; slot++) {
       const row = irRow(slot);
       run = !row.isNull() && !occupied(row) && !pending.has(slot) && !reserved.has(slot) ? run + 1 : 0;
       if (run === count) return slot - run + 1;
@@ -414,8 +417,9 @@ function installNamMac(profiles, scanFailed) {
 
   return {
     modelSlot: () => activeModel() ? getValue(model) + 1 : null,
-    freeSlots: () => Array.from({length: 128}, (_, index) => index + 1)
+    freeSlots: () => Array.from({length: AUDITION_SLOT - 1}, (_, index) => index + 1)
       .filter(slot => slotEmpty(slot) && !reserved.has(slot)),
+    auditionSlotEmpty: () => slotEmpty(AUDITION_SLOT) && !reserved.has(AUDITION_SLOT),
     importPreview(file, slot, audition) {
       const librarian = worker();
       if (librarian.isNull() || !slotEmpty(slot) || reserved.has(slot)) {

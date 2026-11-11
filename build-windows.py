@@ -21,7 +21,8 @@ PYTHON_SHA256 = '9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb3
 FIRMWARE_REV = 'c94834768546393420692794fdbb27c9cc31d718'
 APP_FILES = (
     'start-hx-edit-nam.pyw', 'nam_catalog.py', 'nam_convert.py', 'nam_import.js', 'nam_inventory.py',
-    'nam_view.js', 'tone3000.py', 'tone_browser.py', 'tone_card.html', 'tone_preview.py', 'tone_view.js',
+    'nam_view.js', 'nam_library.py', 'library_card.html', 'tone3000.py', 'tone_browser.py', 'tone_card.html',
+    'tone_preview.py', 'tone_view.js',
 )
 FIRMWARE_FILES = (
     'LICENSE', 'tools/nam2ir.py', 'tools/hx_ctl.py', 'tools/hx_dfu_reboot.py',

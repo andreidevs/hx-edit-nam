@@ -37,6 +37,7 @@ sealed class ToneBrowser : Form
     string catalogPage;
     bool canRetry;
     bool hasTone;
+    bool library;
     Dictionary<string, object> status = new Dictionary<string, object>();
     string cardHtml;
 
@@ -208,6 +209,7 @@ sealed class ToneBrowser : Form
             case "card":
                 cardHtml = (string)message["html"];
                 hasTone = (bool)message["has_tone"];
+                library = message.ContainsKey("library") && (bool)message["library"];
                 LayoutPane();
                 details.CoreWebView2.Navigate(CardUrl);
                 break;
@@ -246,7 +248,8 @@ sealed class ToneBrowser : Form
         if (Visible != show) Visible = show;
         if (!show) return;
         var bounds = dock;
-        var detailHeight = hasTone ? Math.Min(150, Math.Max(130, dock.Height - 100)) : 48;
+        // The NAM library page covers the TONE3000 catalog while it is open.
+        var detailHeight = library ? dock.Height : hasTone ? Math.Min(150, Math.Max(130, dock.Height - 100)) : 48;
         detailHeight = Math.Min(detailHeight, dock.Height);
         if (detailRow.Height != detailHeight) detailRow.Height = detailHeight;
         if (bounds == applied) return;

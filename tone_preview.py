@@ -9,14 +9,20 @@ from threading import Lock, Thread, current_thread
 from time import monotonic
 from urllib.parse import urlsplit
 
+import tempfile
+
+from nam_convert import convert_batch
+from nam_library import render_library
 from tone3000 import API_HOSTS, ORIGIN, ToneError, get_tone, prepare_model, select_tone
 from tone_browser import ToneBrowser
 
 
 CARD = Path(__file__).with_name('tone_card.html')
+KEY_HELP = ('Set T3K_PUBLISHABLE_KEY to the publishable key from TONE3000 → Settings → API Keys '
+            'and restart HX Edit NAM.')
 
 
-def render_card(tone=None, models=()):
+def render_card(tone=None, models=(), library=False):
     visible = tone is not None
     tone = tone or {}
     cover = (tone.get('images') or [''])[0]
@@ -27,12 +33,15 @@ def render_card(tone=None, models=()):
         gear=escape(tone.get('gear', '')), license=escape(tone.get('license', '')), cover=image,
         options=''.join(f'<option value="{int(model["id"])}">{escape(model["name"])}</option>'
                         for model in models),
+        library='' if library else 'hidden',
     )
 
 
 class TonePreview:
-    def __init__(self, script, workspace, converter, detached, message, *, browser_factory=ToneBrowser, client_id=''):
+    def __init__(self, script, workspace, converter, detached, message, *, browser_factory=ToneBrowser, client_id='',
+                 library=None):
         self.script = script
+        self.library = library  # nam_library.Library on Windows; None hides the library
         self.workspace = workspace
         self.converter = converter
         self.detached = detached
@@ -92,10 +101,12 @@ class TonePreview:
         try:
             client_id = (self.client_id or os.environ.get('T3K_PUBLISHABLE_KEY', '')).strip()
             if not client_id.startswith('t3k_pub_'):
-                raise ToneError('Set T3K_PUBLISHABLE_KEY to the publishable key from TONE3000 → Settings → API Keys and restart HX Edit NAM.')
+                if not self.library:
+                    raise ToneError(KEY_HELP)
+                client_id = ''  # the local library still works without a TONE3000 key
             browser = self.browser = self.browser_factory(window, self.bounds, self.detached)
             if browser.wait_ready():
-                browser.send('card', html=render_card(), has_tone=False)
+                browser.send('card', html=render_card(library=bool(self.library)), has_tone=False)
                 slot = self.browse(browser, session, client_id)
         except (ToneError, ValueError, OSError) as error:
             if not self.detached.is_set():
@@ -132,6 +143,9 @@ class TonePreview:
         worker = None
         free_slots = []
         trial = 0
+        kept = None  # the current trial's capture for Add to library / Save to Helix
+        text = ''
+        library = False
 
         def select():
             try:
@@ -145,18 +159,29 @@ class TonePreview:
             worker = Thread(target=select, daemon=True)
             worker.start()
 
-        def status(text, busy=False):
-            browser.send('status', text=text, busy=busy, trial=trial if slot is not None else None,
-                         free_slots=free_slots, model=selected)
+        def status(message, busy=False):
+            nonlocal text
+            if not busy:
+                text = message
+            browser.send('status', text=message, busy=busy, trial=trial if slot is not None else None,
+                         free_slots=free_slots, model=selected, keep=bool(self.library) and kept is not None and 'id' not in kept)
 
-        def audition(candidate, index):
-            nonlocal current, slot, selected, free_slots, trial
-            tone, models, token = candidate
-            status('Downloading and loading the selected profile…', busy=True)
+        def show_card():
+            if library:
+                browser.send('card', html=render_library(self.library.entries()), has_tone=False, library=True)
+            elif current:
+                browser.send('card', html=render_card(*current[:2], library=bool(self.library)), has_tone=True)
+            else:
+                browser.send('card', html=render_card(library=bool(self.library)), has_tone=False)
+            status(text)
+
+        def play(prepare, capture):
+            """Audition a converted profile; return the status text, or None when already reported."""
+            nonlocal slot, free_slots, trial, kept
             try:
-                path = prepare_model(models[index], token, self.workspace, self.converter)
+                path = prepare()
                 if browser.is_set():
-                    return
+                    return None
                 slot = None
                 reply = self.command(session, 'audition', file=path)
                 slot = reply.get('slot')
@@ -164,21 +189,61 @@ class TonePreview:
                 if reply.get('error'):
                     raise ToneError(reply['error'])
                 trial += 1
-                text = f'Auditioning in User IR {slot}.'
+                kept = capture(path) if self.library else None
+                message = f'Auditioning in User IR {slot}.'
                 if not free_slots:
-                    text += ' No other free slot to save to.'
+                    message += ' No other free slot to save to.'
             except (ValueError, ToneError, OSError) as error:
-                text = str(error)
+                message = str(error)
                 if slot is not None:
-                    status(text)
-                    return
-            if current is not candidate:
-                browser.send('card', html=render_card(tone, models), has_tone=True)
-                current = candidate
-            selected = index
-            status(text)
+                    status(message)
+                    return None
+            return message
 
-        start_selection()
+        def audition(candidate, index):
+            nonlocal current, selected
+            tone, models, token = candidate
+            status('Downloading and loading the selected profile…', busy=True)
+
+            def capture(path):
+                source = tone.get('url') or f'{ORIGIN}/tones/{int(tone["id"])}'
+                name = ' – '.join(part for part in (tone.get('title', ''), models[index]['name']) if part)
+                return dict(path=Path(self.workspace, 'captures', Path(path).stem + '.nam'),
+                            name=name, gear=tone.get('gear', ''), source=source)
+
+            message = play(lambda: prepare_model(models[index], token, self.workspace, self.converter), capture)
+            if message is None:
+                return
+            if current is not candidate:
+                current = candidate
+                if not library:
+                    browser.send('card', html=render_card(tone, models, library=bool(self.library)), has_tone=True)
+            selected = index
+            status(message)
+
+        def audition_local(identity):
+            nonlocal current
+            status('Loading the capture from the library…', busy=True)
+
+            def prepare():
+                folder = tempfile.mkdtemp(prefix='library-', dir=self.workspace)
+                return convert_batch([self.library.export(identity, folder)], self.workspace, self.converter)[0]
+
+            message = play(prepare, lambda _path: dict(id=identity))
+            if message is not None:
+                current = None  # the TONE3000 card no longer describes the audition
+                status(message)
+
+        def keep():
+            if kept and 'id' not in kept and kept['path'].is_file():
+                kept['id'] = self.library.add(kept['path'], name=kept['name'], gear=kept['gear'],
+                                              source=kept['source'])
+
+        if client_id:
+            start_selection()
+        else:
+            library = True
+            show_card()
         while (action := browser.next_action()) is not None:
             if isinstance(action, tuple):
                 selection, error = action
@@ -212,14 +277,40 @@ class TonePreview:
                     reply = self.command(session, 'save', slot=int(destination))
                     slot = reply.get('slot')
                     free_slots = reply.get('freeSlots', [])
-                    text = f'Saved in User IR {reply["savedSlot"]}.' if reply.get('savedSlot') else ''
+                    message = f'Saved in User IR {reply["savedSlot"]}.' if reply.get('savedSlot') else ''
+                    if reply.get('savedSlot') and self.library:
+                        try:
+                            keep()
+                        except (OSError, ValueError) as error:
+                            message += f' Could not add it to the library: {error}'
                     if reply.get('error'):
-                        text = f'{text} {reply["error"]}'.strip()
-                    status(text)
+                        message = f'{message} {reply["error"]}'.strip()
+                    status(message)
                 except ToneError as error:
                     status(str(error))
                 continue
-            if action == 'retry' and worker is None:
+            if self.library:
+                command, _, argument = action.partition(':')
+                identity, _, value = argument.partition(':')
+                try:
+                    if command in {'library', 'catalog'}:
+                        if command == 'catalog' and not client_id:
+                            status(KEY_HELP)
+                            continue
+                        library = command == 'library'
+                        show_card()
+                    elif command == 'keep' and argument == str(trial):
+                        keep()
+                        status('Added to the library on this PC.')
+                    elif command == 'pick' and identity in self.library.entries():
+                        audition_local(identity)
+                    elif command == 'gear':
+                        self.library.update(identity, gear=value)
+                    elif command == 'remove':
+                        self.library.remove(identity)
+                except (OSError, ValueError, KeyError) as error:
+                    status(f'Library: {error}')
+            if action == 'retry' and worker is None and client_id:
                 start_selection()
             if current is None:
                 continue
