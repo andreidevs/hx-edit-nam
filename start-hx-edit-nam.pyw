@@ -2,7 +2,9 @@
 
 import argparse
 import ctypes
+from datetime import datetime
 import json
+import os
 from pathlib import Path
 import tempfile
 from threading import Event
@@ -11,10 +13,23 @@ from threading import Event
 ROOT = Path(__file__).resolve().parent
 CONVERTER = ROOT.parent / 'helix-lt-nam' / 'tools' / 'nam2ir.py'
 TITLE = 'HX Edit NAM'
+TRACE = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'HX Edit NAM' / 'trace.log'
 
 
 def message(text, flags):
     return ctypes.windll.user32.MessageBoxW(None, str(text), TITLE, flags)
+
+
+def trace(payload):
+    """Append editor diagnostics to TRACE; they hold no capture or preset names."""
+    line = json.dumps({'time': datetime.now().isoformat(timespec='seconds'), **payload})
+    print(line)
+    try:
+        TRACE.parent.mkdir(parents=True, exist_ok=True)
+        with TRACE.open('a', encoding='utf-8') as log:
+            log.write(line + '\n')
+    except OSError:
+        pass
 
 
 def run_editor(exe, workspace, device, profiles):
@@ -48,6 +63,8 @@ def run_editor(exe, workspace, device, profiles):
             payload = event.get('payload', {})
             if payload.get('type') == 'ready':
                 ready.set()
+            if payload.get('type') == 'toneTrace':
+                trace(payload)
             if payload.get('type') == 'sidebarWidth':
                 try:
                     save_setting('sidebarWidth', int(payload['width']))

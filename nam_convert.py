@@ -73,6 +73,13 @@ def stage_tone_import(file, workspace, *, audition=False):
     return shutil.copyfile(source, folder / name)
 
 
+def import_name(source):
+    """The file name handed to HX Edit's import. Square brackets became round ones after a
+    batch of '[10 layers]' captures failed with -401 (unconfirmed cause, harmless change)."""
+    stem = source.stem.translate(str.maketrans('[]{}', '()()'))
+    return stem + ('.wav' if source.suffix.lower() == '.nam' else source.suffix)
+
+
 def convert_batch(files, workspace, converter):
     sources = [Path(file).resolve(strict=True) for file in files]
     names = set()
@@ -80,7 +87,7 @@ def convert_batch(files, workspace, converter):
         suffix = source.suffix.lower()
         if not source.is_file() or suffix not in {'.wav', '.hir', '.nam'}:
             raise ValueError(f'Choose a .nam, .wav or .hir file: {source.name}')
-        name = (source.with_suffix('.wav').name if suffix == '.nam' else source.name).casefold()
+        name = import_name(source).casefold()
         if name in names:
             raise ValueError(f'Two selected files have the same IR name: {source.stem}')
         names.add(name)
@@ -92,12 +99,12 @@ def convert_batch(files, workspace, converter):
     result = []
     for source in sources:
         if source.suffix.lower() != '.nam':
-            destination = folder / source.name
+            destination = folder / import_name(source)
             shutil.copyfile(source, destination)
         else:
-            destination = folder / source.with_suffix('.wav').name
+            destination = folder / import_name(source)
             # Use the same case-sensitive extension and UTF-8 mode as the firmware tools expect.
-            capture = folder / source.with_suffix('.nam').name
+            capture = destination.with_suffix('.nam')
             shutil.copyfile(source, capture)
             completed = subprocess.run(
                 [sys.executable, '-B', '-X', 'utf8', str(converter), str(capture), '-o', str(destination)],

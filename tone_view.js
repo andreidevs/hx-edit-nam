@@ -273,8 +273,22 @@ function installToneView() {
     if (!transfer) return afterRestore(request, {}, saved);
     const retained = { notice: `Check User IR ${transfer.slot}. The audition profile was left on Helix.` };
     const steps = undoAfter - undoBefore;
-    if (!canRestore(transfer) || steps < 0 || steps > 2 || (!steps && originalSlot !== transfer.slot)) {
+    // Diagnostics for a kept audition: which check failed and the state it saw.
+    const keep = reason => {
+      const state = { type: 'toneTrace', reason, action: request.action, steps, undoBefore, undoAfter, originalSlot,
+        slot: transfer.slot, valid: active.valid, deviceSaved: !!active.deviceSaved };
+      try {
+        Object.assign(state, { undo: undoIndex(), modelSlot: namView.modelSlot(), atPosition: atPosition(),
+          atTarget: atTarget(), sameBlock: block(active.controller) === originalBlock,
+          preview: !!namView.previewName(transfer) });
+      } catch (error) {
+        state.readError = String(error.message);
+      }
+      send(state);
       return afterRestore(request, retained, saved);
+    };
+    if (!canRestore(transfer) || steps < 0 || steps > 2 || (!steps && originalSlot !== transfer.slot)) {
+      return keep(canRestore(transfer) ? 'undo-steps' : 'not-restorable');
     }
     const undo = new NativeFunction(editor.readPointer().add(0xdc).readPointer(), 'int', ['pointer'], 'thiscall');
     let undone = true;
@@ -289,17 +303,17 @@ function installToneView() {
     } finally {
       active.applying = false;
     }
-    if (!undone) return afterRestore(request, retained, saved);
+    if (!undone) return keep('undo-failed');
 
     active.restoring = true;
     poll(request, expired => {
-      if (!atPosition() || undoIndex() !== undoBefore) return afterRestore(request, retained, saved);
+      if (!atPosition() || undoIndex() !== undoBefore) return keep('moved-after-undo');
       if (namView.modelSlot() !== originalSlot || block(active.controller) !== originalBlock) {
-        return expired ? afterRestore(request, retained, saved) : null;
+        return expired ? keep('original-not-back') : null;
       }
       active.block = originalBlock;
       active.restoring = false;
-      if (!namView.clearPreview(transfer)) return afterRestore(request, retained, saved);
+      if (!namView.clearPreview(transfer)) return keep('clear-refused');
       namView.stopPreview();
       poll(request, expired => {
         if (namView.previewSlotEmpty(transfer)) {

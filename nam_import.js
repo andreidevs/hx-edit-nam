@@ -94,6 +94,12 @@ Interceptor.replace(importAddress, new NativeCallback(function (controller, batc
       files.push(file.add(0x10).readPointer().readUtf8String());
       if (row.add(0x10c).readU32()) occupied.push(slot + 1);
     }
+    const captures = files.filter(file => /\.nam$/i.test(file)).length;
+    send({ type: 'toneTrace', reason: 'import-batch', namOnly, tone: !!toneImport, files: files.length, captures });
+    if (captures && !(namOnly && toneImport)) {
+      throw new Error('HX Edit received the original .nam files instead of the converted ones. ' +
+        'Import fewer files at once or use the NAM tab Import.');
+    }
     if (namOnly && toneImport && (files.length !== 1 || !toneImport.supplied ||
         files[0].toLowerCase() !== toneImport.file.toLowerCase())) {
       throw new Error('HX Edit returned a different file for the TONE3000 import.');
@@ -109,6 +115,9 @@ Interceptor.replace(importAddress, new NativeCallback(function (controller, batc
       toneImport.error = String(error.message);
       return;
     }
+    // HX Edit never starts this import, so its completion hook will not reset the NAM tab.
+    if (controller.equals(namImportController)) namImportController = NULL;
+    namView.refreshProfiles(controller);
     messageBox(getActiveWindow(), Memory.allocUtf16String(String(error.message)),
       Memory.allocUtf16String('HX Edit NAM Import'), 0x10);
     return;
@@ -116,6 +125,112 @@ Interceptor.replace(importAddress, new NativeCallback(function (controller, batc
   importFiles(controller, batch, first);
   namView.refreshProfiles(controller);
 }, 'void', importTypes, 'thiscall'));
+
+// HX Edit's IDropTarget refuses .nam files (DragEnter 0x368cf0, DragLeave 0x368d70,
+// Drop 0x368ec0). When a drag carries captures, convert them on DragEnter and
+// give HX Edit a shell data object with the WAVs instead, so its own drop
+// handling imports them into the row under the cursor through the hook above.
+const ole32 = Process.getModuleByName('ole32.dll');
+const shell32 = Module.load('shell32.dll');
+const shell = (name, type, args) => new NativeFunction(shell32.getExportByName(name), type, args, 'stdcall');
+const releaseMedium = new NativeFunction(ole32.getExportByName('ReleaseStgMedium'), 'void', ['pointer'], 'stdcall');
+const dragQueryFile = shell('DragQueryFileW', 'uint', ['pointer', 'uint', 'pointer', 'uint']);
+const parseName = shell('SHParseDisplayName', 'int32', ['pointer', 'pointer', 'pointer', 'uint', 'pointer']);
+const lastId = shell('ILFindLastID', 'pointer', ['pointer']);
+const freeId = shell('ILFree', 'void', ['pointer']);
+const createDataObject = shell('SHCreateDataObject', 'int32', ['pointer', 'uint', 'pointer', 'pointer', 'pointer', 'pointer']);
+const dataObjectId = Memory.alloc(16); // IID_IDataObject {0000010e-0000-0000-C000-000000000046}
+dataObjectId.writeByteArray([0x0e, 0x01, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46]);
+const convertedDrags = new Map(); // dragged paths -> converted paths, for this session
+let dragData = NULL;
+let dragError = null;
+
+function comCall(object, slot, type, args, ...values) {
+  return new NativeFunction(object.readPointer().add(slot * 4).readPointer(), type, ['pointer', ...args], 'stdcall')(object, ...values);
+}
+
+function draggedFiles(data) {
+  const format = Memory.alloc(20); // FORMATETC: CF_HDROP, DVASPECT_CONTENT, TYMED_HGLOBAL
+  format.writeU32(15);
+  format.add(4).writePointer(NULL);
+  format.add(8).writeU32(1);
+  format.add(12).writeS32(-1);
+  format.add(16).writeU32(1);
+  const medium = Memory.alloc(12);
+  if (comCall(data, 3, 'int32', ['pointer', 'pointer'], format, medium) !== 0) return [];
+  try {
+    const files = [];
+    const path = Memory.alloc(2 * 1024);
+    const drop = medium.add(4).readPointer();
+    for (let index = 0, count = dragQueryFile(drop, 0xffffffff, NULL, 0); index < count; index++) {
+      if (dragQueryFile(drop, index, path, 1024)) files.push(path.readUtf16String());
+    }
+    return files;
+  } finally {
+    releaseMedium(medium);
+  }
+}
+
+function itemId(path) {
+  const id = Memory.alloc(Process.pointerSize);
+  if (parseName(Memory.allocUtf16String(path), NULL, id, 0, NULL) !== 0) throw new Error(`Could not open ${path}.`);
+  return id.readPointer();
+}
+
+function filesDataObject(files) {
+  // convert_batch writes every file of a batch into one folder.
+  const ids = [itemId(files[0].slice(0, files[0].lastIndexOf('\\')))];
+  try {
+    const children = Memory.alloc(Process.pointerSize * files.length);
+    files.forEach((file, index) => {
+      ids.push(itemId(file));
+      children.add(index * Process.pointerSize).writePointer(lastId(ids[ids.length - 1]));
+    });
+    const object = Memory.alloc(Process.pointerSize);
+    if (createDataObject(ids[0], files.length, children, NULL, dataObjectId, object) !== 0) {
+      throw new Error('Could not hand the converted captures to HX Edit.');
+    }
+    return object.readPointer();
+  } finally {
+    ids.forEach(id => freeId(id));
+  }
+}
+
+function releaseDragData() {
+  if (!dragData.isNull()) comCall(dragData, 2, 'uint', []);
+  dragData = NULL;
+}
+
+Interceptor.attach(base.add(0x368cf0), {
+  onEnter(args) {
+    releaseDragData();
+    try {
+      const files = draggedFiles(args[1]);
+      if (!files.some(file => /\.nam$/i.test(file))) return;
+      const key = files.join('\n');
+      if (!convertedDrags.has(key)) convertedDrags.set(key, requestImport({ type: 'convert', files }).files);
+      dragData = filesDataObject(convertedDrags.get(key));
+      args[1] = dragData;
+    } catch (error) {
+      dragError = String(error.message); // shown once the drag has ended
+    }
+  },
+});
+Interceptor.attach(base.add(0x368ec0), {
+  onEnter(args) {
+    if (!dragData.isNull()) args[1] = dragData;
+  },
+  onLeave() { releaseDragData(); },
+});
+Interceptor.attach(base.add(0x368d70), {
+  onLeave() {
+    releaseDragData();
+    if (!dragError) return;
+    const text = dragError;
+    dragError = null;
+    messageBox(getActiveWindow(), Memory.allocUtf16String(text), Memory.allocUtf16String('HX Edit NAM Import'), 0x10);
+  },
+});
 
 Interceptor.replace(openFile, new NativeCallback(function (dialog) {
   if (dialog.isNull() || dialog.readU32() < 76) return openFileDialog(dialog);
@@ -147,7 +262,7 @@ Interceptor.replace(openFile, new NativeCallback(function (dialog) {
   }
 
   if (nam) {
-    entries.splice(0, entries.length, 'NAM A2 Lite profiles (*.nam;*.wav)', '*.nam;*.wav');
+    entries.splice(0, entries.length, 'NAM A2 Lite profiles (*.nam;*.wav)', '*.nam;*.wav', 'All files (*.*)', '*.*');
   } else {
     entries[wav] += ';*.nam';
     entries[wav - 1] = 'Cabinet IRs and NAM profiles (' + entries[wav] + ')';
@@ -167,6 +282,8 @@ Interceptor.replace(openFile, new NativeCallback(function (dialog) {
   const selected = multiple
     ? readStrings(buffer, capacity).slice(1).map(name => first + '\\' + name)
     : [first];
+  send({ type: 'toneTrace', reason: 'import-dialog', nam, multiple, files: selected.length,
+    captures: selected.filter(file => /\.nam$/i.test(file)).length });
   if (!selected.some(file => /\.nam$/i.test(file))) return result;
 
   try {
